@@ -1,82 +1,108 @@
-name: Auto Update Worker
+# 工作流名称
+name: Update Worker
 
+# 触发条件
 on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: "0 1 * * *" # 每天凌晨1点运行
-    workflow_dispatch:
-    inputs:
-      force_update:
-        description: '是否强制更新（忽略版本检查）'
-        required: false
-        default: 'false'
+# 手动触发工作流
+workflow_dispatch:
+inputs:
+force_update:
+description: 'Force update (ignore version check)'
+required: false
+default: 'false'
+# 定时触发，每天 UTC 时间凌晨 1 点
+schedule:
+- cron: "0 1 * * *"
 
+# 权限设置
 permissions:
-  contents: write
+contents: write # 允许工作流写入仓库内容
 
+# 工作流任务
 jobs:
-  update:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出仓库
-        uses: actions/checkout@v4
+update:
+runs-on: ubuntu-latest
+steps:
+# 步骤 1: 检出仓库代码
+- name: Checkout repository
+uses: actions/checkout@v4
 
-      - name: 设置环境
-        run: |
-          echo "REPO_URL=https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases" >> $GITHUB_ENV
-          echo "TARGET_FILE=worker.zip" >> $GITHUB_ENV
+# 步骤 2: 安装依赖工具（jq、wget、unzip）
+- name: Install dependencies
+run: |
+sudo apt-get update
+sudo apt-get install -y jq wget unzip
 
-      - name: 检查并更新 Worker
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 GitHub Token 认证
-        run: |
-          # 日志函数
-          log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"; }
+# 步骤 3: 设置环境变量
+- name: Set environment variables
+run: |
+echo "REPO_URL=https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases" >> $GITHUB_ENV
+echo "TARGET_FILE=worker.zip" >> $GITHUB_ENV
 
-          log "开始检查更新..."
+# 步骤 4: 检查并更新 Worker
+- name: Check and update Worker
+env:
+GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+run: |
+# 定义日志函数
+log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"; }
 
-          # 获取本地版本
-          LOCAL_VERSION=$(cat version.txt 2>/dev/null || echo "")
-          log "本地版本: ${LOCAL_VERSION:-无}"
+log "Starting update check..."
 
-          # 获取最新 Release
-          log "获取最新 Release 信息..."
-          RESPONSE=$(curl -s --retry 3 -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" "$REPO_URL")
-          if [ $? -ne 0 ]; then
-            log "ERROR: 无法访问 GitHub API"
-            exit 1
-          fi
+# 检查必要工具是否存在
+command -v jq >/dev/null 2>&1 || { log "Error: jq not found"; exit 1; }
+command -v wget >/dev/null 2>&1 || { log "Error: wget not found"; exit 1; }
+command -v unzip >/dev/null 2>&1 || { log "Error: unzip not found"; exit 1; }
 
-          TAG_NAME=$(echo "$RESPONSE" | jq -r '.[0].tag_name')
-          DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.[0].assets[] | select(.name == "'"$TARGET_FILE"'") | .browser_download_url')
+# 获取本地版本
+LOCAL_VERSION=$(cat version.txt 2>/dev/null || echo "none")
+log "Local version: $LOCAL_VERSION"
 
-          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
-            log "ERROR: 未找到 $TARGET_FILE"
-            exit 1
-          fi
-          log "最新版本: $TAG_NAME"
+# 获取最新 Release 信息
+log "Fetching latest release info..."
+RESPONSE=$(curl -s --retry 3 -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" "$REPO_URL")
+if [ $? -ne 0 ]; then
+log "Error: Failed to access GitHub API"
+exit 1
+fi
 
-          # 判断是否需要更新
-          FORCE_UPDATE=${{ github.event.inputs.force_update || 'false' }}
-          if [ "$LOCAL_VERSION" = "$TAG_NAME" ] && [ "$FORCE_UPDATE" != "true" ]; then
-            log "已是最新版本，无需更新"
-            exit 0
-          fi
+# 检查 API 响应是否有效
+if [ -z "$RESPONSE" ] || [ "$(echo "$RESPONSE" | jq -r 'type')" != "array" ]; then
+log "Error: Invalid GitHub API response"
+exit 1
+fi
 
-          # 下载并更新
-          log "下载 $TARGET_FILE..."
-          wget -q -O "$TARGET_FILE" "$DOWNLOAD_URL"
-          log "解压 $TARGET_FILE..."
-          unzip -o "$TARGET_FILE"
-          rm "$TARGET_FILE"
-          echo "$TAG_NAME" > version.txt
-          log "更新完成，新版本: $TAG_NAME"
+# 提取最新版本号和下载链接
+TAG_NAME=$(echo "$RESPONSE" | jq -r '.[0].tag_name')
+DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.[0].assets[] | select(.name == "'"$TARGET_FILE"'") | .browser_download_url')
 
-      - name: 提交更改
-        if: success() # 仅在更新成功时提交
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "🔄 自动同步 Worker 版本: ${{ steps.check_update.outputs.tag_name || '未知' }}"
-          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+# 检查是否找到下载链接
+if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+log "Error: $TARGET_FILE not found in latest release"
+exit 1
+fi
+log "Latest version: $TAG_NAME"
+
+# 判断是否需要更新
+FORCE_UPDATE=${{ github.event.inputs.force_update || 'false' }}
+if [ "$LOCAL_VERSION" = "$TAG_NAME" ] && [ "$FORCE_UPDATE" != "true" ]; then
+log "Already up-to-date, no update needed"
+exit 0
+fi
+
+# 下载并更新文件
+log "Downloading $TARGET_FILE..."
+wget -q -O "$TARGET_FILE" "$DOWNLOAD_URL" || { log "Error: Failed to download $TARGET_FILE"; exit 1; }
+log "Unzipping $TARGET_FILE..."
+unzip -o "$TARGET_FILE" || { log "Error: Failed to unzip $TARGET_FILE"; exit 1; }
+rm "$TARGET_FILE"
+echo "$TAG_NAME" > version.txt
+log "Update completed, new version: $TAG_NAME"
+
+# 步骤 5: 提交更改
+- name: Commit changes
+if: success()
+uses: stefanzweifel/git-auto-commit-action@v5
+with:
+commit_message: "🔄 Auto-sync Worker version: ${{ steps.check_update.outputs.tag_name || 'unknown' }}"
+commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
