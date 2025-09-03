@@ -1,4 +1,5 @@
 name: Auto Update Worker
+
 on:
     workflow_dispatch:
     inputs:
