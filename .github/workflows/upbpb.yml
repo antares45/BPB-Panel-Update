@@ -1,7 +1,5 @@
-# 工作流名称
 name: Update Worker
 
-# 触发条件
 on:
 workflow_dispatch:
 inputs:
@@ -12,11 +10,9 @@ default: 'false'
 schedule:
 - cron: "0 1 * * *"
 
-# 权限设置
 permissions:
 contents: write
 
-# 工作流任务
 jobs:
 update:
 runs-on: ubuntu-22.04
