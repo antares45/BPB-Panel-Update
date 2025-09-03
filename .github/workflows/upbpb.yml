@@ -1,6 +1,11 @@
 name: Auto Update Worker
 
 on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 1 * * *" # 每天凌晨1点运行
     workflow_dispatch:
     inputs:
       force_update:
